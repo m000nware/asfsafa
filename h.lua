@@ -1,59 +1,30 @@
 --[[
-    FIX IT UP - REALISTIC HUMAN PLAYER SCRIPT
-    Spielt wie ein echter Mensch - KEINE TELEPORTS!
-    
-    Features:
-    - FÄHRT zu Locations (kein Teleport)
-    - Klickt Teile manuell an
-    - Zieht Teile realistisch
-    - Sucht Autos im Junkyard
-    - Wartet realistisch zwischen Aktionen
-    
-    Deutscher Support - Made for realistic gameplay
+    ╔═══════════════════════════════════════════╗
+    ║    FIX IT UP - REALISTISCHER SCRIPT       ║
+    ║    Fährt • 160s Wartezeit • Findet Autos  ║
+    ╚═══════════════════════════════════════════╝
 ]]
 
--- ========================================
--- EINSTELLUNGEN / SETTINGS
--- ========================================
-getgenv().RealisticSettings = getgenv().RealisticSettings or {
-    -- Hauptfunktionen
-    AutoFarmEnabled = false,
-    
-    -- Fahr-Einstellungen
-    DriveSpeed = 50, -- Geschwindigkeit beim Fahren (50 = normal)
-    UseRoads = true, -- Versucht Straßen zu benutzen
-    
-    -- Zeitverzögerungen (in Sekunden)
-    WaitAfterBuy = 3, -- Wartet nach Kauf
-    WaitAfterRepair = 1, -- Wartet nach jeder Reparatur
-    WaitAfterPaint = 4, -- Wartet nach Lackierung
-    WaitBeforeSell = 2, -- Wartet vor Verkauf
-    
-    -- Sucheinstellungen
-    MaxCarPrice = 50000, -- Maximaler Preis für Auto
-    PreferRare = false, -- Bevorzugt seltene Autos
-    
-    -- Reparatur-Einstellungen
-    CleanParts = true, -- Reinigt Teile
-    ReplaceSparks = true, -- Ersetzt Zündkerzen
-    ReplaceInjectors = true, -- Ersetzt Injektoren
-    
-    -- Sicherheit
-    RandomDelays = true, -- Fügt zufällige Verzögerungen hinzu
-    LookAround = true, -- Bewegt Kamera wie echter Spieler
+-- ═══════════════════════════════════════════════════════
+-- EINSTELLUNGEN
+-- ═══════════════════════════════════════════════════════
+local Settings = {
+    MaxCarPrice = 999999, -- Maximaler Preis
+    WaitTime = 160, -- MUSS 160 Sekunden warten!
+    RepairSpeed = "Normal", -- Normal, Fast, Slow
+    DriveSpeed = 45, -- Fahrgeschwindigkeit
+    AutoPaint = true, -- Automatisch lackieren
+    PaintColor = "Really black", -- Lackfarbe
 }
 
-local Settings = getgenv().RealisticSettings
-
--- ========================================
--- SERVICES & VARIABLEN
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- SERVICES
+-- ═══════════════════════════════════════════════════════
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local PathfindingService = game:GetService("PathfindingService")
 local TweenService = game:GetService("TweenService")
 
 local Player = Players.LocalPlayer
@@ -61,222 +32,134 @@ local Character = Player.Character or Player.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid")
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
+-- ═══════════════════════════════════════════════════════
+-- VARIABLEN
+-- ═══════════════════════════════════════════════════════
 local CurrentCar = nil
-local CurrentSeat = nil
 local TotalProfit = 0
 local CarsFixed = 0
-local IsProcessing = false
+local Running = false
+local CurrentSeat = nil
+local StartTime = os.time()
 
--- ========================================
--- HELPER FUNCTIONS
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- UTILITY FUNCTIONS
+-- ═══════════════════════════════════════════════════════
 
 local function Notify(text)
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Fix It Up Realistisch",
+    game.StarterGui:SetCore("SendNotification", {
+        Title = "Fix It Up",
         Text = text,
-        Duration = 3,
+        Duration = 3
     })
 end
 
 local function RandomWait(min, max)
-    if Settings.RandomDelays then
-        local time = math.random(min * 100, max * 100) / 100
-        task.wait(time)
-    else
-        task.wait(min)
-    end
+    task.wait(math.random(min * 10, max * 10) / 10)
 end
 
-local function MoveCameraToLook(target)
-    if not Settings.LookAround then return end
-    
-    local Camera = workspace.CurrentCamera
-    if Camera and target then
-        local lookCFrame = CFrame.new(Camera.CFrame.Position, target)
-        
-        local tween = TweenService:Create(
-            Camera,
-            TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingStyle.Out),
-            {CFrame = lookCFrame}
-        )
-        tween:Play()
-        task.wait(0.5)
-    end
+local function Log(message)
+    print("[FIX IT UP] " .. message)
 end
 
--- ========================================
--- AUTO FINDEN / FIND CARS
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- AUTO FINDEN FUNKTIONEN
+-- ═══════════════════════════════════════════════════════
 
-local function FindCarsInJunkyard()
-    local junkyard = Workspace:FindFirstChild("Junkyard") or Workspace:FindFirstChild("JunkyardCars")
-    if not junkyard then
-        print("[DEBUG] Kein Junkyard gefunden!")
-        return {}
-    end
+local function FindAllCarsInJunkyard()
+    Log("Suche nach Autos im Junkyard...")
     
-    local availableCars = {}
+    local cars = {}
     
-    for _, car in pairs(junkyard:GetDescendants()) do
-        -- Sucht nach Autos (Models mit VehicleSeat)
-        if car:IsA("Model") then
-            local seat = car:FindFirstChild("VehicleSeat", true)
-            local price = car:FindFirstChild("Price") or car:FindFirstChild("Value")
-            
-            if seat and price then
-                table.insert(availableCars, {
-                    Car = car,
-                    Price = price.Value or 0,
-                    Seat = seat,
-                    Rarity = car:FindFirstChild("Rarity") and car.Rarity.Value or 1
-                })
+    -- Methode 1: Suche nach "Junkyard" Ordner
+    local junkyard = Workspace:FindFirstChild("Junkyard")
+    if junkyard then
+        Log("Junkyard Ordner gefunden!")
+        for _, item in pairs(junkyard:GetDescendants()) do
+            if item:IsA("Model") and item:FindFirstChild("VehicleSeat") then
+                local priceTag = item:FindFirstChild("Price") or item:FindFirstChild("Cost")
+                if priceTag then
+                    table.insert(cars, {
+                        Model = item,
+                        Price = priceTag.Value,
+                        Position = item:GetModelCFrame().Position
+                    })
+                end
             end
         end
     end
     
-    print("[DEBUG] Gefunden: " .. #availableCars .. " Autos im Junkyard")
-    return availableCars
-end
-
-local function FindBestCarInJunkyard()
-    local cars = FindCarsInJunkyard()
-    
-    if #cars == 0 then
-        return nil
+    -- Methode 2: Suche in "Cars" Ordner
+    local carsFolder = Workspace:FindFirstChild("Cars")
+    if carsFolder then
+        Log("Cars Ordner gefunden!")
+        for _, item in pairs(carsFolder:GetChildren()) do
+            if item:IsA("Model") and not item:FindFirstChild("Owned") then
+                local seat = item:FindFirstChildOfClass("VehicleSeat") or item:FindFirstChild("Seat", true)
+                if seat then
+                    table.insert(cars, {
+                        Model = item,
+                        Price = 0,
+                        Position = item:GetModelCFrame().Position
+                    })
+                end
+            end
+        end
     end
     
-    -- Sortiere nach Preis oder Seltenheit
-    table.sort(cars, function(a, b)
-        if Settings.PreferRare then
-            return a.Rarity > b.Rarity
-        else
-            return a.Price < b.Price
+    -- Methode 3: Durchsuche ganzen Workspace nach Autos mit "ForSale" Tag
+    for _, item in pairs(Workspace:GetDescendants()) do
+        if item:IsA("Model") then
+            local forSale = item:FindFirstChild("ForSale")
+            if forSale and forSale.Value == true then
+                local seat = item:FindFirstChildOfClass("VehicleSeat")
+                if seat then
+                    local priceTag = item:FindFirstChild("Price")
+                    table.insert(cars, {
+                        Model = item,
+                        Price = priceTag and priceTag.Value or 0,
+                        Position = item:GetModelCFrame().Position
+                    })
+                end
+            end
         end
+    end
+    
+    Log("Gefunden: " .. #cars .. " Autos")
+    return cars
+end
+
+local function GetCheapestCar(carList)
+    if #carList == 0 then return nil end
+    
+    table.sort(carList, function(a, b)
+        return a.Price < b.Price
     end)
     
-    -- Finde erstes Auto unter Max-Preis
-    for _, carData in ipairs(cars) do
+    for _, carData in ipairs(carList) do
         if carData.Price <= Settings.MaxCarPrice then
-            print("[DEBUG] Bestes Auto: " .. carData.Car.Name .. " für €" .. carData.Price)
+            Log("Bestes Auto: " .. carData.Model.Name .. " für €" .. carData.Price)
             return carData
         end
     end
     
-    return nil
+    return carList[1]
 end
 
--- ========================================
--- FAHREN / DRIVING
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- MOVEMENT & DRIVING
+-- ═══════════════════════════════════════════════════════
 
-local function GetInCar(vehicleSeat)
-    if not vehicleSeat then return false end
+local function WalkTo(position)
+    Log("Laufe zu Position...")
     
-    print("[DEBUG] Versuche ins Auto zu steigen...")
+    if not HumanoidRootPart then return false end
     
-    -- Gehe zum Auto
-    local attempts = 0
-    while (HumanoidRootPart.Position - vehicleSeat.Position).Magnitude > 10 and attempts < 30 do
-        Humanoid:MoveTo(vehicleSeat.Position)
-        task.wait(0.5)
-        attempts = attempts + 1
-    end
+    local distance = (HumanoidRootPart.Position - position).Magnitude
     
-    if attempts >= 30 then
-        print("[DEBUG] Konnte Auto nicht erreichen!")
-        return false
-    end
-    
-    -- Setze dich ins Auto
-    task.wait(0.5)
-    vehicleSeat:Sit(Humanoid)
-    task.wait(1)
-    
-    if Humanoid.Sit then
-        print("[DEBUG] Erfolgreich ins Auto gestiegen!")
-        CurrentSeat = vehicleSeat
+    if distance < 5 then
         return true
     end
-    
-    return false
-end
-
-local function DriveTo(targetPosition, speed)
-    speed = speed or Settings.DriveSpeed
-    
-    if not CurrentSeat then
-        print("[DEBUG] Nicht im Auto!")
-        return false
-    end
-    
-    print("[DEBUG] Fahre zu Ziel...")
-    
-    local car = CurrentSeat.Parent
-    if not car or not car.PrimaryPart then return false end
-    
-    local driving = true
-    local timeout = tick() + 120 -- 2 Minuten Timeout
-    
-    while driving and tick() < timeout do
-        local distance = (car.PrimaryPart.Position - targetPosition).Magnitude
-        
-        if distance < 20 then
-            -- Angekommen!
-            CurrentSeat.ThrottleFloat = 0
-            CurrentSeat.SteerFloat = 0
-            print("[DEBUG] Ziel erreicht!")
-            break
-        end
-        
-        -- Berechne Richtung
-        local direction = (targetPosition - car.PrimaryPart.Position).Unit
-        local carDirection = car.PrimaryPart.CFrame.LookVector
-        
-        -- Steuere
-        local angle = math.acos(direction:Dot(carDirection))
-        local cross = carDirection:Cross(direction).Y
-        
-        -- Gas geben
-        CurrentSeat.ThrottleFloat = 1
-        
-        -- Lenken
-        if math.abs(angle) > 0.1 then
-            if cross > 0 then
-                CurrentSeat.SteerFloat = 1
-            else
-                CurrentSeat.SteerFloat = -1
-            end
-        else
-            CurrentSeat.SteerFloat = 0
-        end
-        
-        task.wait(0.1)
-    end
-    
-    -- Stoppe Auto
-    CurrentSeat.ThrottleFloat = 0
-    CurrentSeat.SteerFloat = 0
-    task.wait(0.5)
-    
-    return true
-end
-
-local function GetOutOfCar()
-    if CurrentSeat then
-        print("[DEBUG] Steige aus Auto aus...")
-        Humanoid.Jump = true
-        task.wait(0.5)
-        CurrentSeat = nil
-    end
-end
-
--- ========================================
--- KAUFEN / BUYING
--- ========================================
-
-local function WalkToPosition(position)
-    print("[DEBUG] Gehe zu Position...")
     
     Humanoid:MoveTo(position)
     
@@ -288,411 +171,498 @@ local function WalkToPosition(position)
     return (HumanoidRootPart.Position - position).Magnitude < 10
 end
 
-local function BuyCar(carData)
-    if not carData then return false end
+local function SitInCar(vehicleSeat)
+    if not vehicleSeat then return false end
     
-    local car = carData.Car
-    local price = carData.Price
+    Log("Steige ins Auto...")
     
-    Notify("Kaufe: " .. car.Name .. " für €" .. price)
-    print("[DEBUG] Starte Kaufprozess...")
-    
-    -- Gehe zum Auto
-    local buyPosition = car.PrimaryPart and car.PrimaryPart.Position or car:GetModelCFrame().Position
-    
-    if not WalkToPosition(buyPosition) then
-        print("[DEBUG] Konnte Auto nicht erreichen!")
+    -- Gehe zum Sitz
+    local success = WalkTo(vehicleSeat.Position)
+    if not success then
+        Log("Kann Auto nicht erreichen!")
         return false
     end
     
-    RandomWait(1, 2)
-    
-    -- Suche Kaufbutton oder Prompt
-    local buyPrompt = car:FindFirstChild("ProximityPrompt", true)
-    if buyPrompt then
-        print("[DEBUG] Drücke Kaufbutton...")
-        fireproximityprompt(buyPrompt)
-        task.wait(Settings.WaitAfterBuy)
-        return true
-    end
-    
-    -- Alternative: Suche nach RemoteEvent
-    local buyEvent = ReplicatedStorage:FindFirstChild("PurchaseCar") or 
-                     ReplicatedStorage:FindFirstChild("BuyCar") or
-                     ReplicatedStorage:FindFirstChild("PurchaseVehicle")
-    
-    if buyEvent then
-        print("[DEBUG] Sende Kaufanfrage...")
-        buyEvent:FireServer(car)
-        task.wait(Settings.WaitAfterBuy)
-        return true
-    end
-    
-    print("[DEBUG] Keine Kaufmethode gefunden!")
-    return false
-end
-
--- ========================================
--- REPARIEREN / REPAIRING
--- ========================================
-
-local function GetOwnedCar()
-    -- Suche nach unserem Auto in Garage
-    local garage = Workspace:FindFirstChild("Garage") or 
-                   Workspace:FindFirstChild("PlayerCars") or
-                   Workspace:FindFirstChild("OwnedCars")
-    
-    if not garage then
-        print("[DEBUG] Keine Garage gefunden!")
-        return nil
-    end
-    
-    for _, car in pairs(garage:GetChildren()) do
-        if car:IsA("Model") then
-            local owner = car:FindFirstChild("Owner")
-            if owner and owner.Value == Player then
-                print("[DEBUG] Eigenes Auto gefunden: " .. car.Name)
-                return car
-            end
-        end
-    end
-    
-    -- Alternative: Suche in Workspace direkt
-    for _, car in pairs(Workspace:GetChildren()) do
-        if car:IsA("Model") and car:FindFirstChild("Owner") then
-            if car.Owner.Value == Player then
-                return car
-            end
-        end
-    end
-    
-    return nil
-end
-
-local function ClickPart(part)
-    if not part then return false end
-    
-    print("[DEBUG] Klicke auf Teil: " .. part.Name)
-    
-    -- Bewege Kamera zum Teil
-    MoveCameraToLook(part.Position)
-    
-    -- Gehe zum Teil
-    if (HumanoidRootPart.Position - part.Position).Magnitude > 10 then
-        WalkToPosition(part.Position)
-    end
-    
-    RandomWait(0.3, 0.7)
-    
-    -- Klicke auf Teil (simuliere Mausklick)
-    local clickDetector = part:FindFirstChild("ClickDetector")
-    if clickDetector then
-        fireclickdetector(clickDetector)
-        RandomWait(0.2, 0.5)
-        return true
-    end
-    
-    -- Alternative: ProximityPrompt
-    local prompt = part:FindFirstChild("ProximityPrompt")
-    if prompt then
-        fireproximityprompt(prompt)
-        RandomWait(0.2, 0.5)
-        return true
-    end
-    
-    return false
-end
-
-local function RepairEnginePart(part)
-    print("[DEBUG] Repariere Motorteil: " .. part.Name)
-    
-    -- 1. Klicke auf Teil
-    ClickPart(part)
     RandomWait(0.5, 1)
     
-    -- 2. Prüfe ob Teil entfernt werden muss
-    if part.Name:find("Spark") or part.Name:find("Injector") then
-        print("[DEBUG] Teil muss ersetzt werden")
-        
-        -- Entferne altes Teil
-        local removeEvent = ReplicatedStorage:FindFirstChild("RemovePart")
-        if removeEvent then
-            removeEvent:FireServer(part)
-            RandomWait(0.5, 1)
-        end
-        
-        -- Kaufe neues Teil
-        if Settings.ReplaceSparks or Settings.ReplaceInjectors then
-            local buyPartEvent = ReplicatedStorage:FindFirstChild("BuyPart")
-            if buyPartEvent then
-                buyPartEvent:FireServer(part.Name)
-                RandomWait(0.5, 1)
-            end
-        end
-        
+    -- Setze dich
+    vehicleSeat:Sit(Humanoid)
+    task.wait(1)
+    
+    if Humanoid.Sit then
+        CurrentSeat = vehicleSeat
+        Log("Im Auto!")
         return true
     end
     
-    -- 3. Reinige Teil
-    if Settings.CleanParts then
-        print("[DEBUG] Reinige Teil...")
-        
-        -- Suche Waschmaschine
-        local washMachine = Workspace:FindFirstChild("WashingMachine") or
-                           Workspace:FindFirstChild("PartWasher")
-        
-        if washMachine then
-            WalkToPosition(washMachine.Position)
-            ClickPart(washMachine)
-            RandomWait(2, 3)
-        end
+    return false
+end
+
+local function DriveToPosition(targetPos)
+    if not CurrentSeat then
+        Log("Nicht im Auto!")
+        return false
     end
     
-    -- 4. Repariere Teil
-    local repairEvent = ReplicatedStorage:FindFirstChild("RepairPart") or
-                        ReplicatedStorage:FindFirstChild("FixPart")
+    Log("Fahre zum Ziel...")
     
-    if repairEvent then
-        print("[DEBUG] Sende Reparatur-Event...")
-        repairEvent:FireServer(part)
-        RandomWait(Settings.WaitAfterRepair, Settings.WaitAfterRepair + 0.5)
+    local car = CurrentSeat.Parent
+    local startTime = tick()
+    local maxTime = 60 -- 60 Sekunden max
+    
+    while CurrentSeat and tick() - startTime < maxTime do
+        local carPos = car.PrimaryPart and car.PrimaryPart.Position or car:GetModelCFrame().Position
+        local distance = (carPos - targetPos).Magnitude
+        
+        if distance < 15 then
+            Log("Ziel erreicht!")
+            -- Stoppe
+            CurrentSeat.ThrottleFloat = 0
+            CurrentSeat.SteerFloat = 0
+            break
+        end
+        
+        -- Berechne Richtung
+        local direction = (targetPos - carPos).Unit
+        local carLook = car.PrimaryPart.CFrame.LookVector
+        
+        -- Lenken
+        local angle = math.acos(math.clamp(direction:Dot(carLook), -1, 1))
+        local cross = carLook:Cross(direction)
+        
+        if angle > 0.2 then
+            CurrentSeat.SteerFloat = cross.Y > 0 and 1 or -1
+        else
+            CurrentSeat.SteerFloat = 0
+        end
+        
+        -- Gas
+        CurrentSeat.ThrottleFloat = 1
+        
+        task.wait(0.1)
+    end
+    
+    -- Stoppe Auto
+    if CurrentSeat then
+        CurrentSeat.ThrottleFloat = 0
+        CurrentSeat.SteerFloat = 0
     end
     
     return true
 end
 
+local function ExitCar()
+    if CurrentSeat and Humanoid then
+        Log("Steige aus...")
+        Humanoid.Jump = true
+        task.wait(0.5)
+        CurrentSeat = nil
+    end
+end
+
+-- ═══════════════════════════════════════════════════════
+-- KAUF FUNKTIONEN
+-- ═══════════════════════════════════════════════════════
+
+local function BuyCarWithRemote(car)
+    Log("Versuche Auto zu kaufen...")
+    
+    -- Suche nach allen möglichen RemoteEvents
+    local possibleEvents = {
+        "PurchaseCar",
+        "BuyCar",
+        "PurchaseVehicle",
+        "BuyVehicle",
+        "Purchase",
+        "Buy"
+    }
+    
+    for _, eventName in ipairs(possibleEvents) do
+        local event = ReplicatedStorage:FindFirstChild(eventName, true)
+        if event and (event:IsA("RemoteEvent") or event:IsA("RemoteFunction")) then
+            Log("Gefunden: " .. eventName)
+            
+            pcall(function()
+                if event:IsA("RemoteEvent") then
+                    event:FireServer(car)
+                else
+                    event:InvokeServer(car)
+                end
+            end)
+            
+            return true
+        end
+    end
+    
+    -- Alternative: Suche nach ClickDetector oder ProximityPrompt
+    for _, part in pairs(car:GetDescendants()) do
+        local click = part:FindFirstChildOfClass("ClickDetector")
+        if click then
+            Log("ClickDetector gefunden!")
+            fireclickdetector(click)
+            return true
+        end
+        
+        local prompt = part:FindFirstChildOfClass("ProximityPrompt")
+        if prompt then
+            Log("ProximityPrompt gefunden!")
+            fireproximityprompt(prompt)
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function BuyCar(carData)
+    if not carData then return false end
+    
+    local car = carData.Model
+    Notify("Kaufe: " .. car.Name)
+    
+    -- Gehe zum Auto
+    local buyPos = carData.Position
+    WalkTo(buyPos)
+    RandomWait(1, 2)
+    
+    -- Versuche zu kaufen
+    local success = BuyCarWithRemote(car)
+    
+    if success then
+        Log("Kauf erfolgreich!")
+        RandomWait(2, 3)
+        return true
+    else
+        Log("Kauf fehlgeschlagen!")
+        return false
+    end
+end
+
+-- ═══════════════════════════════════════════════════════
+-- EIGENES AUTO FINDEN
+-- ═══════════════════════════════════════════════════════
+
+local function FindMyOwnedCar()
+    Log("Suche nach meinem Auto...")
+    
+    -- Methode 1: Suche nach "Owned" Tag
+    for _, car in pairs(Workspace:GetDescendants()) do
+        if car:IsA("Model") and car:FindFirstChild("Owner") then
+            if car.Owner.Value == Player or car.Owner.Value == Player.Name then
+                Log("Eigenes Auto gefunden: " .. car.Name)
+                return car
+            end
+        end
+    end
+    
+    -- Methode 2: Suche in PlayerCars Ordner
+    local playerCars = Workspace:FindFirstChild("PlayerCars")
+    if playerCars then
+        for _, car in pairs(playerCars:GetChildren()) do
+            if car:IsA("Model") then
+                local owner = car:FindFirstChild("Owner")
+                if owner and (owner.Value == Player or owner.Value == Player.Name) then
+                    return car
+                end
+            end
+        end
+    end
+    
+    -- Methode 3: Suche nach Auto mit unserem Namen
+    for _, car in pairs(Workspace:GetDescendants()) do
+        if car:IsA("Model") and car.Name:find(Player.Name) then
+            local seat = car:FindFirstChildOfClass("VehicleSeat")
+            if seat then
+                return car
+            end
+        end
+    end
+    
+    Log("Kein eigenes Auto gefunden!")
+    return nil
+end
+
+-- ═══════════════════════════════════════════════════════
+-- REPARATUR FUNKTIONEN
+-- ═══════════════════════════════════════════════════════
+
+local function FindBrokenParts(car)
+    Log("Suche kaputte Teile...")
+    
+    local brokenParts = {}
+    
+    for _, part in pairs(car:GetDescendants()) do
+        if part:IsA("BasePart") or part:IsA("Model") then
+            -- Prüfe auf "Broken" oder "Damaged" Tag
+            local broken = part:FindFirstChild("Broken") or part:FindFirstChild("Damaged")
+            if broken and broken.Value == true then
+                table.insert(brokenParts, part)
+            end
+            
+            -- Prüfe Condition
+            local condition = part:FindFirstChild("Condition") or part:FindFirstChild("Health")
+            if condition and condition.Value < 100 then
+                table.insert(brokenParts, part)
+            end
+        end
+    end
+    
+    Log("Gefunden: " .. #brokenParts .. " kaputte Teile")
+    return brokenParts
+end
+
+local function RepairPart(part)
+    Log("Repariere: " .. part.Name)
+    
+    -- Gehe zum Teil
+    if part:IsA("BasePart") then
+        WalkTo(part.Position)
+    elseif part:IsA("Model") and part.PrimaryPart then
+        WalkTo(part.PrimaryPart.Position)
+    end
+    
+    RandomWait(0.3, 0.7)
+    
+    -- Klicke auf Teil
+    local click = part:FindFirstChildOfClass("ClickDetector")
+    if click then
+        fireclickdetector(click)
+    end
+    
+    local prompt = part:FindFirstChildOfClass("ProximityPrompt")
+    if prompt then
+        fireproximityprompt(prompt)
+    end
+    
+    -- Sende Repair Event
+    local repairEvents = {
+        "RepairPart",
+        "FixPart",
+        "Repair",
+        "Fix"
+    }
+    
+    for _, eventName in ipairs(repairEvents) do
+        local event = ReplicatedStorage:FindFirstChild(eventName, true)
+        if event then
+            pcall(function()
+                if event:IsA("RemoteEvent") then
+                    event:FireServer(part)
+                else
+                    event:InvokeServer(part)
+                end
+            end)
+        end
+    end
+    
+    local waitTime = Settings.RepairSpeed == "Fast" and 0.3 or 
+                     Settings.RepairSpeed == "Slow" and 1.5 or 0.7
+    task.wait(waitTime)
+end
+
 local function RepairCar(car)
     if not car then return false end
     
-    Notify("Starte Reparatur von " .. car.Name)
-    print("[DEBUG] === REPARATUR START ===")
-    IsProcessing = true
+    Notify("Starte Reparatur...")
+    Log("=== REPARATUR START ===")
     
-    -- Gehe zum Auto
-    local carPosition = car.PrimaryPart and car.PrimaryPart.Position or car:GetModelCFrame().Position
-    WalkToPosition(carPosition)
-    RandomWait(1, 2)
+    -- Finde alle kaputten Teile
+    local brokenParts = FindBrokenParts(car)
     
-    -- 1. Öffne Motorhaube
-    local hood = car:FindFirstChild("Hood") or car:FindFirstChild("Bonnet")
-    if hood then
-        print("[DEBUG] Öffne Motorhaube...")
-        ClickPart(hood)
-        RandomWait(1, 2)
+    if #brokenParts == 0 then
+        Log("Keine kaputten Teile gefunden!")
+        return true
     end
     
-    -- 2. Finde alle kaputten Teile
-    local brokenParts = {}
+    Notify("Repariere " .. #brokenParts .. " Teile")
     
-    -- Suche im Motor
-    local engine = car:FindFirstChild("Engine")
-    if engine then
-        for _, part in pairs(engine:GetDescendants()) do
-            if part:IsA("BasePart") or part:IsA("Model") then
-                -- Prüfe ob kaputt
-                local damaged = part:FindFirstChild("Damaged") or part:FindFirstChild("Broken")
-                if damaged and damaged.Value == true then
-                    table.insert(brokenParts, part)
-                end
-                
-                -- Oder: Condition unter 100%
-                local condition = part:FindFirstChild("Condition")
-                if condition and condition.Value < 100 then
-                    table.insert(brokenParts, part)
-                end
-            end
-        end
-    end
-    
-    -- Suche am ganzen Auto
-    for _, part in pairs(car:GetDescendants()) do
-        if part:IsA("BasePart") then
-            local damaged = part:FindFirstChild("Damaged")
-            if damaged and damaged.Value == true then
-                if not table.find(brokenParts, part) then
-                    table.insert(brokenParts, part)
-                end
-            end
-        end
-    end
-    
-    print("[DEBUG] Gefunden: " .. #brokenParts .. " kaputte Teile")
-    Notify("Repariere " .. #brokenParts .. " Teile...")
-    
-    -- 3. Repariere alle Teile
+    -- Repariere alle Teile
     for i, part in ipairs(brokenParts) do
-        print("[DEBUG] [" .. i .. "/" .. #brokenParts .. "] Repariere: " .. part.Name)
-        RepairEnginePart(part)
+        RepairPart(part)
         
         if i % 5 == 0 then
             Notify(string.format("Fortschritt: %d/%d", i, #brokenParts))
         end
     end
     
-    -- 4. Schließe Motorhaube
-    if hood then
-        print("[DEBUG] Schließe Motorhaube...")
-        ClickPart(hood)
-        RandomWait(0.5, 1)
-    end
-    
-    IsProcessing = false
-    print("[DEBUG] === REPARATUR FERTIG ===")
+    Log("=== REPARATUR FERTIG ===")
     Notify("Reparatur abgeschlossen!")
     return true
 end
 
--- ========================================
--- LACKIEREN / PAINTING
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- LACKIEREN
+-- ═══════════════════════════════════════════════════════
 
 local function PaintCar(car)
+    if not Settings.AutoPaint then return true end
     if not car then return false end
     
+    Log("Lackiere Auto...")
     Notify("Fahre zur Lackiererei...")
-    print("[DEBUG] Starte Lackierung...")
     
-    -- Steige ins Auto
-    local seat = car:FindFirstChild("VehicleSeat", true)
-    if not seat then
-        print("[DEBUG] Kein Sitz gefunden!")
-        return false
-    end
-    
-    GetInCar(seat)
-    RandomWait(1, 2)
-    
-    -- Fahre zur Lackiererei
+    -- Finde Paint Shop
     local paintShop = Workspace:FindFirstChild("PaintShop") or
+                      Workspace:FindFirstChild("Paint") or
                       Workspace:FindFirstChild("SprayShop")
     
     if paintShop then
-        local paintPosition = paintShop:FindFirstChild("PaintZone") or paintShop.PrimaryPart
-        if paintPosition then
-            DriveTo(paintPosition.Position, 40)
+        -- Fahre dorthin
+        local seat = car:FindFirstChildOfClass("VehicleSeat")
+        if seat then
+            SitInCar(seat)
+            RandomWait(1, 2)
+            
+            local paintPos = paintShop:GetModelCFrame().Position
+            DriveToPosition(paintPos)
+            
+            ExitCar()
         end
     end
     
-    GetOutOfCar()
     RandomWait(1, 2)
     
-    -- Lackiere Auto
-    local paintEvent = ReplicatedStorage:FindFirstChild("PaintCar") or
-                       ReplicatedStorage:FindFirstChild("PaintVehicle")
+    -- Lackiere
+    local paintEvents = {"PaintCar", "Paint", "SprayCar", "ColorCar"}
     
-    if paintEvent then
-        local colors = {"Metallic Black", "Metallic Red", "Metallic Blue", "Metallic Silver"}
-        local randomColor = colors[math.random(1, #colors)]
-        
-        print("[DEBUG] Lackiere Auto: " .. randomColor)
-        paintEvent:FireServer(car, randomColor)
-        task.wait(Settings.WaitAfterPaint)
-        Notify("Lackierung fertig!")
-        return true
+    for _, eventName in ipairs(paintEvents) do
+        local event = ReplicatedStorage:FindFirstChild(eventName, true)
+        if event then
+            pcall(function()
+                if event:IsA("RemoteEvent") then
+                    event:FireServer(car, Settings.PaintColor)
+                else
+                    event:InvokeServer(car, Settings.PaintColor)
+                end
+            end)
+            break
+        end
     end
     
-    return false
+    Log("Lackierung fertig!")
+    return true
 end
 
--- ========================================
--- VERKAUFEN / SELLING
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- VERKAUF
+-- ═══════════════════════════════════════════════════════
 
 local function SellCar(car)
     if not car then return false end
     
-    Notify("Fahre zum Verkaufsstand...")
-    print("[DEBUG] Starte Verkaufsprozess...")
+    Log("Verkaufe Auto...")
+    Notify("Fahre zum Verkauf...")
     
-    -- Steige ins Auto
-    local seat = car:FindFirstChild("VehicleSeat", true)
-    if seat then
-        GetInCar(seat)
-        RandomWait(1, 2)
-        
-        -- Fahre zu Auktionshaus/Verkaufsstand
-        local auctionHouse = Workspace:FindFirstChild("AuctionHouse") or
-                            Workspace:FindFirstChild("SellZone") or
-                            Workspace:FindFirstChild("Dealership")
-        
-        if auctionHouse then
-            local sellPosition = auctionHouse:FindFirstChild("SellPoint") or auctionHouse.PrimaryPart
-            if sellPosition then
-                DriveTo(sellPosition.Position, 40)
+    -- Finde Verkaufsort
+    local sellLocation = Workspace:FindFirstChild("SellZone") or
+                         Workspace:FindFirstChild("Dealership") or
+                         Workspace:FindFirstChild("AuctionHouse")
+    
+    if sellLocation then
+        -- Fahre dorthin
+        local seat = car:FindFirstChildOfClass("VehicleSeat")
+        if seat then
+            SitInCar(seat)
+            RandomWait(1, 2)
+            
+            local sellPos = sellLocation:GetModelCFrame().Position
+            DriveToPosition(sellPos)
+            
+            ExitCar()
+        end
+    end
+    
+    RandomWait(1, 2)
+    
+    -- Verkaufe
+    local sellEvents = {"SellCar", "Sell", "SellVehicle"}
+    
+    for _, eventName in ipairs(sellEvents) do
+        local event = ReplicatedStorage:FindFirstChild(eventName, true)
+        if event then
+            local sold = false
+            pcall(function()
+                if event:IsA("RemoteEvent") then
+                    event:FireServer(car)
+                    sold = true
+                else
+                    event:InvokeServer(car)
+                    sold = true
+                end
+            end)
+            
+            if sold then
+                CarsFixed = CarsFixed + 1
+                Notify("Verkauft! Total: " .. CarsFixed .. " Autos")
+                return true
             end
         end
-        
-        GetOutOfCar()
     end
     
-    RandomWait(Settings.WaitBeforeSell, Settings.WaitBeforeSell + 1)
-    
-    -- Verkaufe Auto
-    local sellEvent = ReplicatedStorage:FindFirstChild("SellCar") or
-                      ReplicatedStorage:FindFirstChild("SellVehicle")
-    
-    if sellEvent then
-        print("[DEBUG] Verkaufe Auto...")
-        
-        local value = car:FindFirstChild("Value") or car:FindFirstChild("Price")
-        local soldFor = value and value.Value or 0
-        
-        sellEvent:FireServer(car)
-        
-        CarsFixed = CarsFixed + 1
-        TotalProfit = TotalProfit + soldFor
-        
-        Notify(string.format("Verkauft für €%d! Total: €%d", soldFor, TotalProfit))
-        task.wait(2)
-        return true
-    end
-    
+    Log("Verkauf fehlgeschlagen!")
     return false
 end
 
--- ========================================
--- HAUPT-LOOP / MAIN LOOP
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- 160 SEKUNDEN WARTEZEIT MIT COUNTDOWN
+-- ═══════════════════════════════════════════════════════
+
+local function WaitWithCountdown(seconds)
+    Notify("Warte " .. seconds .. " Sekunden...")
+    
+    for i = seconds, 0, -1 do
+        if not Running then break end
+        
+        if i % 10 == 0 or i <= 5 then
+            Log("Noch " .. i .. " Sekunden...")
+        end
+        
+        task.wait(1)
+    end
+    
+    Notify("Wartezeit vorbei!")
+end
+
+-- ═══════════════════════════════════════════════════════
+-- HAUPT LOOP
+-- ═══════════════════════════════════════════════════════
 
 local function MainLoop()
-    while Settings.AutoFarmEnabled do
-        if IsProcessing then
-            task.wait(1)
-            continue
-        end
-        
+    while Running do
+        Log("=== NEUER DURCHGANG ===")
         Notify("Suche neues Auto...")
-        print("[DEBUG] === NEUER DURCHLAUF ===")
         
-        -- 1. Fahre zum Junkyard
-        print("[DEBUG] Gehe zum Junkyard...")
-        local junkyard = Workspace:FindFirstChild("Junkyard")
-        if junkyard then
-            WalkToPosition(junkyard.Position)
-        end
-        RandomWait(2, 3)
+        -- 1. Finde Autos
+        local allCars = FindAllCarsInJunkyard()
         
-        -- 2. Finde und kaufe Auto
-        local carData = FindBestCarInJunkyard()
-        
-        if not carData then
-            Notify("Keine Autos gefunden! Warte...")
+        if #allCars == 0 then
+            Notify("Keine Autos gefunden! Warte 15s...")
             task.wait(15)
             continue
         end
         
-        local success = BuyCar(carData)
+        -- 2. Wähle günstigstes Auto
+        local selectedCar = GetCheapestCar(allCars)
         
-        if not success then
+        if not selectedCar then
+            Notify("Kein passendes Auto gefunden!")
+            task.wait(10)
+            continue
+        end
+        
+        -- 3. Kaufe Auto
+        local buySuccess = BuyCar(selectedCar)
+        
+        if not buySuccess then
             Notify("Kauf fehlgeschlagen!")
             task.wait(5)
             continue
         end
         
-        RandomWait(2, 3)
+        RandomWait(2, 4)
         
-        -- 3. Hole gekauftes Auto
-        CurrentCar = GetOwnedCar()
+        -- 4. Finde unser Auto
+        CurrentCar = FindMyOwnedCar()
         
         if not CurrentCar then
             Notify("Auto nicht gefunden!")
@@ -700,119 +670,128 @@ local function MainLoop()
             continue
         end
         
-        -- 4. Fahre Auto zur Garage
-        print("[DEBUG] Fahre zur Garage...")
-        local seat = CurrentCar:FindFirstChild("VehicleSeat", true)
+        -- 5. Fahre zur Garage/Werkstatt
+        Log("Fahre zur Werkstatt...")
+        local seat = CurrentCar:FindFirstChildOfClass("VehicleSeat")
         if seat then
-            GetInCar(seat)
+            SitInCar(seat)
             RandomWait(1, 2)
             
-            local garage = Workspace:FindFirstChild("Garage") or Workspace:FindFirstChild("Workshop")
+            local garage = Workspace:FindFirstChild("Garage") or 
+                          Workspace:FindFirstChild("Workshop") or
+                          Workspace:FindFirstChild("RepairZone")
+            
             if garage then
-                DriveTo(garage.Position, 50)
+                DriveToPosition(garage:GetModelCFrame().Position)
             end
             
-            GetOutOfCar()
+            ExitCar()
         end
         
         RandomWait(2, 3)
         
-        -- 5. Repariere Auto
+        -- 6. Repariere Auto
         RepairCar(CurrentCar)
         RandomWait(2, 3)
         
-        -- 6. Lackiere Auto (optional)
+        -- 7. Lackiere Auto
         if Settings.AutoPaint then
             PaintCar(CurrentCar)
             RandomWait(2, 3)
         end
         
-        -- 7. Verkaufe Auto
+        -- 8. *** WICHTIG: 160 SEKUNDEN WARTEN! ***
+        Log("=== WARTEZEIT: 160 SEKUNDEN ===")
+        Notify("⏰ MUSS 160 Sekunden warten!")
+        WaitWithCountdown(Settings.WaitTime)
+        
+        -- 9. Verkaufe Auto
         SellCar(CurrentCar)
         
         CurrentCar = nil
         
-        print("[DEBUG] === DURCHLAUF BEENDET ===")
+        Log("=== DURCHGANG BEENDET ===")
         RandomWait(3, 5)
     end
 end
 
--- ========================================
+-- ═══════════════════════════════════════════════════════
 -- GUI
--- ========================================
+-- ═══════════════════════════════════════════════════════
 
 local function CreateGUI()
     local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "FixItUpRealistic"
+    ScreenGui.Name = "FixItUpGUI"
     ScreenGui.ResetOnSpawn = false
     ScreenGui.Parent = Player.PlayerGui
     
-    local MainFrame = Instance.new("Frame")
-    MainFrame.Size = UDim2.new(0, 350, 0, 400)
-    MainFrame.Position = UDim2.new(0.5, -175, 0.5, -200)
-    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    MainFrame.BorderSizePixel = 0
-    MainFrame.Parent = ScreenGui
+    -- Main Frame
+    local Frame = Instance.new("Frame")
+    Frame.Size = UDim2.new(0, 320, 0, 380)
+    Frame.Position = UDim2.new(0.5, -160, 0.5, -190)
+    Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    Frame.BorderSizePixel = 0
+    Frame.Parent = ScreenGui
     
     local Corner = Instance.new("UICorner")
-    Corner.CornerRadius = UDim.new(0, 12)
-    Corner.Parent = MainFrame
+    Corner.CornerRadius = UDim.new(0, 15)
+    Corner.Parent = Frame
     
-    -- Titel
+    -- Title
     local Title = Instance.new("TextLabel")
     Title.Size = UDim2.new(1, 0, 0, 50)
-    Title.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    Title.Text = "🔧 FIX IT UP REALISTISCH"
+    Title.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    Title.Text = "🔧 FIX IT UP"
     Title.TextColor3 = Color3.new(1, 1, 1)
-    Title.TextSize = 18
-    Title.Font = Enum.Font.SourceSansBold
-    Title.Parent = MainFrame
+    Title.TextSize = 22
+    Title.Font = Enum.Font.GothamBold
+    Title.Parent = Frame
     
     local TitleCorner = Instance.new("UICorner")
-    TitleCorner.CornerRadius = UDim.new(0, 12)
+    TitleCorner.CornerRadius = UDim.new(0, 15)
     TitleCorner.Parent = Title
     
-    -- Status Text
+    -- Status
     local Status = Instance.new("TextLabel")
-    Status.Size = UDim2.new(1, -20, 0, 60)
+    Status.Size = UDim2.new(1, -20, 0, 70)
     Status.Position = UDim2.new(0, 10, 0, 60)
-    Status.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    Status.Text = "Status: Bereit"
-    Status.TextColor3 = Color3.fromRGB(100, 255, 100)
+    Status.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    Status.Text = "Status: Bereit\n160s Wartezeit aktiv ⏰"
+    Status.TextColor3 = Color3.fromRGB(100, 200, 100)
     Status.TextSize = 16
-    Status.Font = Enum.Font.SourceSans
-    Status.Parent = MainFrame
+    Status.Font = Enum.Font.Gotham
+    Status.Parent = Frame
     
     local StatusCorner = Instance.new("UICorner")
-    StatusCorner.CornerRadius = UDim.new(0, 8)
+    StatusCorner.CornerRadius = UDim.new(0, 10)
     StatusCorner.Parent = Status
     
     -- Start Button
     local StartBtn = Instance.new("TextButton")
     StartBtn.Size = UDim2.new(1, -20, 0, 50)
-    StartBtn.Position = UDim2.new(0, 10, 0, 130)
+    StartBtn.Position = UDim2.new(0, 10, 0, 140)
     StartBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-    StartBtn.Text = "▶ START AUTO FARM"
+    StartBtn.Text = "▶ START"
     StartBtn.TextColor3 = Color3.new(1, 1, 1)
     StartBtn.TextSize = 18
-    StartBtn.Font = Enum.Font.SourceSansBold
-    StartBtn.Parent = MainFrame
+    StartBtn.Font = Enum.Font.GothamBold
+    StartBtn.Parent = Frame
     
     local BtnCorner = Instance.new("UICorner")
-    BtnCorner.CornerRadius = UDim.new(0, 8)
+    BtnCorner.CornerRadius = UDim.new(0, 10)
     BtnCorner.Parent = StartBtn
     
     StartBtn.MouseButton1Click:Connect(function()
-        Settings.AutoFarmEnabled = not Settings.AutoFarmEnabled
+        Running = not Running
         
-        if Settings.AutoFarmEnabled then
-            StartBtn.Text = "⏸ STOP AUTO FARM"
+        if Running then
+            StartBtn.Text = "⏸ STOP"
             StartBtn.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
-            Status.Text = "Status: Läuft..."
+            Status.Text = "Status: Läuft...\n160s Wartezeit aktiv ⏰"
             Status.TextColor3 = Color3.fromRGB(255, 200, 50)
             task.spawn(MainLoop)
         else
-            StartBtn.Text = "▶ START AUTO FARM"
+            StartBtn.Text = "▶ START"
             StartBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
             Status.Text = "Status: Gestoppt"
             Status.TextColor3 = Color3.fromRGB(255, 100, 100)
@@ -821,52 +800,48 @@ local function CreateGUI()
     
     -- Stats
     local Stats = Instance.new("TextLabel")
-    Stats.Size = UDim2.new(1, -20, 0, 120)
-    Stats.Position = UDim2.new(0, 10, 0, 190)
-    Stats.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    Stats.Text = "═══ STATISTIK ═══\nAutos: 0\nGewinn: €0"
+    Stats.Size = UDim2.new(1, -20, 0, 100)
+    Stats.Position = UDim2.new(0, 10, 0, 200)
+    Stats.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    Stats.Text = "═══ STATISTIK ═══\nAutos: 0\nLaufzeit: 00:00"
     Stats.TextColor3 = Color3.new(1, 1, 1)
     Stats.TextSize = 16
-    Stats.Font = Enum.Font.SourceSans
+    Stats.Font = Enum.Font.Gotham
     Stats.TextYAlignment = Enum.TextYAlignment.Top
-    Stats.Parent = MainFrame
+    Stats.Parent = Frame
     
     local StatsCorner = Instance.new("UICorner")
-    StatsCorner.CornerRadius = UDim.new(0, 8)
+    StatsCorner.CornerRadius = UDim.new(0, 10)
     StatsCorner.Parent = Stats
     
     -- Info
     local Info = Instance.new("TextLabel")
-    Info.Size = UDim2.new(1, -20, 0, 70)
-    Info.Position = UDim2.new(0, 10, 0, 320)
-    Info.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    Info.Text = "🚗 Fährt realistisch\n🔧 Keine Teleports\n✋ Klickt manuell"
+    Info.Size = UDim2.new(1, -20, 0, 60)
+    Info.Position = UDim2.new(0, 10, 0, 310)
+    Info.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    Info.Text = "⏰ 160s Wartezeit\n🚗 Fährt realistisch\n🔧 Keine Teleports"
     Info.TextColor3 = Color3.fromRGB(150, 150, 150)
     Info.TextSize = 14
-    Info.Font = Enum.Font.SourceSans
-    Info.Parent = MainFrame
+    Info.Font = Enum.Font.Gotham
+    Info.Parent = Frame
     
     local InfoCorner = Instance.new("UICorner")
-    InfoCorner.CornerRadius = UDim.new(0, 8)
+    InfoCorner.CornerRadius = UDim.new(0, 10)
     InfoCorner.Parent = Info
     
-    -- Update Stats
+    -- Update Stats Loop
     task.spawn(function()
         while ScreenGui.Parent do
-            Stats.Text = string.format(
-                "═══ STATISTIK ═══\nAutos repariert: %d\nGesamtgewinn: €%d\nØ Gewinn: €%d",
-                CarsFixed,
-                TotalProfit,
-                CarsFixed > 0 and math.floor(TotalProfit / CarsFixed) or 0
-            )
+            local runtime = os.time() - StartTime
+            local hours = math.floor(runtime / 3600)
+            local minutes = math.floor((runtime % 3600) / 60)
             
-            if Settings.AutoFarmEnabled and IsProcessing then
-                Status.Text = "Status: Repariert..."
-                Status.TextColor3 = Color3.fromRGB(255, 200, 50)
-            elseif Settings.AutoFarmEnabled then
-                Status.Text = "Status: Sucht Auto..."
-                Status.TextColor3 = Color3.fromRGB(100, 255, 100)
-            end
+            Stats.Text = string.format(
+                "═══ STATISTIK ═══\nAutos repariert: %d\nLaufzeit: %02d:%02d",
+                CarsFixed,
+                hours,
+                minutes
+            )
             
             task.wait(1)
         end
@@ -880,40 +855,58 @@ local function CreateGUI()
     CloseBtn.Text = "X"
     CloseBtn.TextColor3 = Color3.new(1, 1, 1)
     CloseBtn.TextSize = 18
-    CloseBtn.Font = Enum.Font.SourceSansBold
+    CloseBtn.Font = Enum.Font.GothamBold
     CloseBtn.Parent = Title
     
     local CloseCorner = Instance.new("UICorner")
-    CloseCorner.CornerRadius = UDim.new(0, 6)
+    CloseCorner.CornerRadius = UDim.new(0, 8)
     CloseCorner.Parent = CloseBtn
     
     CloseBtn.MouseButton1Click:Connect(function()
-        Settings.AutoFarmEnabled = false
+        Running = false
         ScreenGui:Destroy()
     end)
     
-    Notify("Script geladen! Drücke START")
+    -- Draggable
+    local dragging, dragInput, dragStart, startPos
+    
+    Title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = Frame.Position
+            
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    
+    Title.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            Frame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
 end
 
--- ========================================
--- INITIALISIERUNG
--- ========================================
+-- ═══════════════════════════════════════════════════════
+-- ANTI-AFK
+-- ═══════════════════════════════════════════════════════
 
-print("═══════════════════════════════════")
-print("FIX IT UP - REALISTISCHER SCRIPT")
-print("Made in Germany 🇩🇪")
-print("═══════════════════════════════════")
-print("Features:")
-print("✓ Fährt wie echter Spieler")
-print("✓ KEINE Teleports")
-print("✓ Klickt Teile manuell")
-print("✓ Realistische Wartezeiten")
-print("═══════════════════════════════════")
-
-CreateGUI()
-Notify("Realistischer Script geladen!")
-
--- Anti-AFK
 task.spawn(function()
     while true do
         for _, connection in pairs(getconnections(Player.Idled)) do
@@ -922,3 +915,18 @@ task.spawn(function()
         task.wait(60)
     end
 end)
+
+-- ═══════════════════════════════════════════════════════
+-- START
+-- ═══════════════════════════════════════════════════════
+
+print("════════════════════════════════════")
+print("FIX IT UP - REALISTISCHER SCRIPT")
+print("✓ 160 Sekunden Wartezeit")
+print("✓ Findet Autos automatisch")
+print("✓ Fährt realistisch")
+print("✓ Keine Teleports")
+print("════════════════════════════════════")
+
+CreateGUI()
+Notify("Script geladen! ⏰ 160s Wartezeit aktiv")
